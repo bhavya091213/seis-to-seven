@@ -1,0 +1,21 @@
+# Python dependencies for ASR (Automatic Speech Recognition) module
+# Install with: pip install -r requirements.txt
+
+# Core libraries for audio processing
+wave>=0.0.2          # Built-in Python library for WAV file handling (usually included)
+
+# HTTP requests for API calls
+requests>=2.31.0     # For making HTTP requests to ElevenLabs API
+
+# Audio processing and mathematical operations  
+numpy>=1.24.0        # For numerical operations and audio data manipulation
+
+# Optional: Additional audio processing libraries (uncomment if needed)
+# soundfile>=0.12.1    # Alternative audio file I/O library
+# pydub>=0.25.1        # Audio manipulation library with more format support
+# webrtcvad>=2.0.10    # Voice Activity Detection (for future real-time processing)
+
+# Development and testing
+# pytest>=7.4.0       # For unit testing
+# black>=23.0.0        # Code formatting
+# flake8>=6.0.0        # Code linting
