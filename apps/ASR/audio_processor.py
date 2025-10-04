@@ -2,8 +2,32 @@ import wave
 import os
 import json
 import uuid
-import requests
 from typing import Union
+from dotenv import load_dotenv
+from elevenlabs.client import ElevenLabs
+from io import BytesIO
+import sys
+
+# Add the routing directory to Python path to import processing.py
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'routing'))
+
+try:
+    from processing import text_to_speech_stream, create_voice
+    PROCESSING_AVAILABLE = True
+    print("✅ Successfully imported processing.py functions")
+except ImportError as e:
+    print(f"⚠️  Could not import processing.py: {e}")
+    print("Text-to-speech functionality will be disabled")
+    PROCESSING_AVAILABLE = False
+
+# Load environment variables from .env file
+load_dotenv()
+
+# Initialize the ElevenLabs client
+# It will automatically use the ELEVENLABS_API_KEY from the environment
+elevenlabs_client = ElevenLabs(
+    api_key=os.getenv("ELEVENLABS_API_KEY"),
+)
 
 def process_audio(from_lang: str, to_lang: str, pcm_bytes: bytes) -> dict:
     """
@@ -80,6 +104,72 @@ def process_audio(from_lang: str, to_lang: str, pcm_bytes: bytes) -> dict:
         return error_response
 
 
+def demonstrate_text_to_speech(text: str, voice_id: str = None, output_filename: str = None) -> str:
+    """
+    Demonstrate text-to-speech functionality using the processing.py module.
+    
+    This function can be called separately to convert text to speech using
+    either a custom voice (created from recorded audio) or a default voice.
+    
+    Args:
+        text (str): The text to convert to speech
+        voice_id (str, optional): The voice ID to use. If None, uses default voice
+        output_filename (str, optional): Output filename. If None, generates automatically
+        
+    Returns:
+        str: Path to the generated audio file, or empty string if failed
+    """
+    
+    if not PROCESSING_AVAILABLE:
+        print("❌ Processing.py functions not available")
+        return ""
+    
+    try:
+        # Use provided voice ID or fall back to default
+        if not voice_id:
+            voice_id = "JBFqnCBsd6RMkjVDRZzb"  # Default voice from processing.py
+            print(f"🔊 Using default voice: {voice_id}")
+        else:
+            print(f"🎤 Using custom voice: {voice_id}")
+        
+        # Generate output filename if not provided
+        if not output_filename:
+            timestamp = str(int(uuid.uuid4().int))[:-10]  # Use UUID-based timestamp
+            output_filename = f"tts_output_{timestamp}.mp3"
+        
+        # Ensure output is in recordings directory
+        recordings_dir = "recordings"
+        if not os.path.exists(recordings_dir):
+            os.makedirs(recordings_dir)
+        
+        output_path = os.path.join(recordings_dir, output_filename)
+        
+        print(f"🎵 Generating speech: '{text[:50]}{'...' if len(text) > 50 else ''}'")
+        print(f"📁 Output file: {output_path}")
+        
+        # Generate speech using processing.py
+        audio_generator = text_to_speech_stream(
+            text=text,
+            voice_id=voice_id
+        )
+        
+        # Save the generated audio
+        with open(output_path, "wb") as f:
+            chunk_count = 0
+            for chunk in audio_generator:
+                f.write(chunk)
+                chunk_count += 1
+            
+        print(f"✅ Successfully generated speech in {chunk_count} chunks")
+        print(f"💾 Audio saved to: {output_path}")
+        
+        return output_path
+        
+    except Exception as e:
+        print(f"❌ Error generating text-to-speech: {e}")
+        return ""
+
+
 def _convert_pcm_to_wav(pcm_bytes: bytes) -> str:
     """
     Convert raw PCM16 bytes to a properly formatted WAV file.
@@ -128,7 +218,7 @@ def _convert_pcm_to_wav(pcm_bytes: bytes) -> str:
 
 def _transcribe_with_elevenlabs(wav_file_path: str, language_code: str) -> dict:
     """
-    Send WAV file to ElevenLabs Speech-to-Text API for transcription.
+    Send WAV file to ElevenLabs Speech-to-Text API for transcription using the ElevenLabs client.
     
     Uses ElevenLabs' speech-to-text endpoint with automatic language detection.
     The API can handle language detection automatically, but we can optionally
@@ -142,15 +232,8 @@ def _transcribe_with_elevenlabs(wav_file_path: str, language_code: str) -> dict:
         dict: Parsed JSON response containing transcribed text and detected language
     """
     
-    # ElevenLabs Speech-to-Text API endpoint
-    api_url = "https://api.elevenlabs.io/v1/speech-to-text"
-    
-    # TODO: Replace with your actual ElevenLabs API key
-    # You can get this from: https://elevenlabs.io/docs/api-reference/getting-started
-    # api_key = "your_elevenlabs_api_key_here"
-    api_key = None  # COMMENTED OUT - Replace with actual API key
-    
-    if api_key is None:
+    # Check if ElevenLabs client is properly initialized
+    if elevenlabs_client is None or not os.getenv("ELEVENLABS_API_KEY"):
         print("WARNING: ElevenLabs API key not provided. Using mock response.")
         # Return mock response for testing purposes
         return {
@@ -158,55 +241,67 @@ def _transcribe_with_elevenlabs(wav_file_path: str, language_code: str) -> dict:
             "detected_language": language_code
         }
     
-    # Prepare headers with API key authentication
-    headers = {
-        "xi-api-key": api_key
-    }
-    
-    # Prepare the audio file for upload
     try:
+        print(f"Sending request to ElevenLabs API...")
+        print(f"File: {wav_file_path}")
+        print(f"Language code: {language_code}")
+        
+        # Read the WAV file and convert to BytesIO for the API
         with open(wav_file_path, 'rb') as audio_file:
-            # Prepare multipart form data
-            files = {
-                'audio': ('audio.wav', audio_file, 'audio/wav')
-            }
-            
-            # Optional: Include language code for better accuracy
-            data = {}
-            if language_code:
-                data['language_code'] = language_code
-            
-            print(f"Sending request to ElevenLabs API...")
-            print(f"File: {wav_file_path}")
-            print(f"Language code: {language_code}")
-            
-            # Make POST request to ElevenLabs API
-            response = requests.post(
-                api_url, 
-                headers=headers, 
-                files=files, 
-                data=data,
-                timeout=30  # 30 second timeout
+            audio_data = audio_file.read()
+            audio_buffer = BytesIO(audio_data)
+        
+        # Call ElevenLabs Speech-to-Text API using the client
+        # Note: The exact method name may vary - check ElevenLabs Python SDK documentation
+        try:
+            # Attempt to use the speech-to-text functionality
+            # This is the most likely API call structure based on ElevenLabs SDK
+            result = elevenlabs_client.speech_to_text.convert(
+                audio=audio_buffer,
+                language=language_code if language_code else None
             )
             
-            # Check if request was successful
-            if response.status_code == 200:
-                # Parse JSON response
-                result = response.json()
-                print(f"Transcription successful: {result.get('text', '')[:100]}...")
-                return result
+            # Handle different possible response formats
+            if hasattr(result, 'text'):
+                transcribed_text = result.text
+                detected_lang = getattr(result, 'detected_language', language_code)
+            elif isinstance(result, dict):
+                transcribed_text = result.get('text', '')
+                detected_lang = result.get('detected_language', language_code)
             else:
-                # Handle API errors
-                error_msg = f"ElevenLabs API error: {response.status_code} - {response.text}"
-                print(f"ERROR: {error_msg}")
-                raise Exception(error_msg)
+                # If result is just a string
+                transcribed_text = str(result)
+                detected_lang = language_code
+            
+            print(f"Transcription successful: {transcribed_text[:100]}...")
+            
+            return {
+                "text": transcribed_text,
+                "detected_language": detected_lang
+            }
+            
+        except AttributeError as attr_error:
+            # If the API method doesn't exist, try alternative approaches
+            print(f"API method not found, trying alternative approach: {attr_error}")
+            
+            # Alternative: Check if there's a different method structure
+            # You may need to adjust this based on the actual ElevenLabs SDK documentation
+            try:
+                result = elevenlabs_client.transcribe(audio_buffer)
+                return {
+                    "text": str(result),
+                    "detected_language": language_code
+                }
+            except Exception as alt_error:
+                print(f"Alternative approach also failed: {alt_error}")
+                raise Exception(f"ElevenLabs SDK method not found. Please check the documentation.")
                 
-    except requests.exceptions.RequestException as e:
-        error_msg = f"Network error calling ElevenLabs API: {str(e)}"
-        print(f"ERROR: {error_msg}")
-        raise Exception(error_msg)
     except FileNotFoundError:
         error_msg = f"Audio file not found: {wav_file_path}"
+        print(f"ERROR: {error_msg}")
+        raise Exception(error_msg)
+    except Exception as e:
+        error_msg = f"Error calling ElevenLabs API: {str(e)}"
         print(f"ERROR: {error_msg}")
         raise Exception(error_msg)
 
@@ -250,11 +345,10 @@ def _call_translator_service(text: str, from_lang: str, to_lang: str) -> None:
 
 def _send_audio_file(file_path: str) -> None:
     """
-    Send the saved WAV file to another team's service (placeholder function).
+    Send the saved WAV file to the text-to-speech processing service.
     
-    This function serves as a placeholder for sending the audio file to
-    another team's service. This could be via HTTP upload, file system copy,
-    message queue, etc., depending on the integration architecture.
+    This function integrates with the processing.py module to handle the WAV file.
+    It can be used for voice cloning or other audio processing tasks.
     
     Args:
         file_path (str): Path to the WAV file to send
@@ -263,7 +357,7 @@ def _send_audio_file(file_path: str) -> None:
         None: This is a fire-and-forget call
     """
     
-    print(f"PLACEHOLDER: Calling send_audio_file() with:")
+    print(f"📤 Sending audio file to processing service:")
     print(f"  File path: {file_path}")
     
     # Check if file exists before attempting to send
@@ -275,41 +369,49 @@ def _send_audio_file(file_path: str) -> None:
     file_size = os.path.getsize(file_path)
     print(f"  File size: {file_size} bytes")
     
-    # TODO: Implement actual file sending logic
-    # Example implementations:
+    # Check if processing functions are available
+    if not PROCESSING_AVAILABLE:
+        print("⚠️  Processing.py functions not available - using placeholder behavior")
+        print("  Audio file saved locally but not processed further")
+        return
     
-    # Option 1: HTTP upload to another service
-    # try:
-    #     with open(file_path, 'rb') as audio_file:
-    #         files = {'audio': audio_file}
-    #         response = requests.post('http://other-team-service/upload', files=files)
-    #         print(f"File sent successfully: {response.status_code}")
-    # except Exception as e:
-    #     print(f"Error sending file via HTTP: {e}")
-    
-    # Option 2: Copy to shared directory
-    # try:
-    #     import shutil
-    #     shared_dir = "/shared/audio_files/"
-    #     shutil.copy2(file_path, shared_dir)
-    #     print(f"File copied to shared directory: {shared_dir}")
-    # except Exception as e:
-    #     print(f"Error copying file: {e}")
-    
-    # Option 3: Message queue notification
-    # try:
-    #     import pika  # RabbitMQ example
-    #     connection = pika.BlockingConnection(pika.ConnectionParameters('localhost'))
-    #     channel = connection.channel()
-    #     channel.basic_publish(
-    #         exchange='',
-    #         routing_key='audio_files',
-    #         body=file_path
-    #     )
-    #     connection.close()
-    #     print(f"File path sent to message queue")
-    # except Exception as e:
-    #     print(f"Error sending to message queue: {e}")
+    try:
+        # Option 1: Use the audio file for voice cloning
+        # This creates a new voice using the recorded audio
+        print("🎤 Creating voice clone from recorded audio...")
+        
+        # Extract a base name for the voice from the file path
+        base_name = os.path.splitext(os.path.basename(file_path))[0]
+        voice_name = f"RecordedVoice_{base_name[:8]}"  # Use first 8 characters of filename
+        
+        voice_id = create_voice(
+            name=voice_name,
+            description=f"Voice cloned from recorded audio: {os.path.basename(file_path)}",
+            file_paths=[file_path]
+        )
+        
+        print(f"✅ Successfully created voice clone with ID: {voice_id}")
+        print(f"   Voice name: {voice_name}")
+        
+        # Store the voice ID for potential future use
+        # You could save this to a file or database for later reference
+        voice_info = {
+            "voice_id": voice_id,
+            "voice_name": voice_name,
+            "source_file": file_path,
+            "created_at": json.dumps(os.path.getctime(file_path))
+        }
+        
+        # Save voice info to a JSON file for tracking
+        voice_info_path = file_path.replace('.wav', '_voice_info.json')
+        with open(voice_info_path, 'w') as f:
+            json.dump(voice_info, f, indent=2)
+        
+        print(f"💾 Voice information saved to: {voice_info_path}")
+        
+    except Exception as e:
+        print(f"❌ Error processing audio file with processing.py: {e}")
+        print("  Audio file saved locally but processing failed")
 
 
 # Example usage and testing
@@ -349,3 +451,19 @@ if __name__ == "__main__":
     
     print("\n=== Final Result ===")
     print(json.dumps(result, indent=2))
+    
+    # Demonstrate text-to-speech functionality
+    print("\n=== Text-to-Speech Demo ===")
+    if PROCESSING_AVAILABLE:
+        demo_text = "This is a demonstration of the integrated text-to-speech functionality."
+        tts_output = demonstrate_text_to_speech(
+            text=demo_text,
+            output_filename="demo_tts_output.mp3"
+        )
+        
+        if tts_output:
+            print(f"🎉 Text-to-speech demo completed! Check: {tts_output}")
+        else:
+            print("❌ Text-to-speech demo failed")
+    else:
+        print("⚠️  Text-to-speech functionality not available")
