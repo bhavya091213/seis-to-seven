@@ -1,3 +1,4 @@
+import base64
 import os
 from dotenv import load_dotenv
 from elevenlabs.client import ElevenLabs
@@ -14,44 +15,81 @@ elevenlabs_client = ElevenLabs(
 
 # --- Core Functions (callable from other Python files) ---
 
-def create_voice(name: str, description: str, file_paths: list[str]) -> str:
-    """
-    Creates a new voice clone from one or more audio files.
+# def create_voice(name: str, description: str, audio_b64: str) -> str:
+#     """
+#     Creates a new voice clone from one or more audio files.
 
-    Args:
-        name (str): The name for the new voice.
-        description (str): A description for the new voice.
-        file_paths (list[str]): A list of absolute paths to the audio files.
+#     Args:
+#         name (str): The name for the new voice.
+#         description (str): A description for the new voice.
+#         file_paths (list[str]): A list of absolute paths to the audio files.
 
-    Returns:
-        str: The newly created voice_id.
-    """
+#     Returns:
+#         str: The newly created voice_id.
+#     """
+    
+#     data_bytes = base64.b64decode(audio_b64)
+#     buf = BytesIO(data_bytes)
+#     buf.name = "voice.wav"  # ElevenLabs SDK expects file-like objects to have a 'name' attribute
+
+#     voice = elevenlabs_client.voices.ivc.create(
+#         name=name,
+#         description=description,
+#         files=[buf],
+#     )
+#     return voice.voice_id
+
+# def text_to_speech_stream(text: str, voice_id: str, model_id: str = "eleven_multilingual_v2"):
+#     """
+#     Converts text to speech and streams the audio.
+
+#     Args:
+#         text (str): The text to convert.
+#         voice_id (str): The ID of the voice to use.
+#         model_id (str, optional): The model to use. Defaults to "eleven_multilingual_v2".
+
+#     Yields:
+#         bytes: Audio chunks from the API.
+#     """
+#     audio_stream = elevenlabs_client.text_to_speech.convert(
+#         text=text,
+#         voice_id=voice_id,
+#         model_id=model_id,
+#         output_format="mp3_44100_128",
+#     )
+
+#     for chunk in audio_stream:
+#         yield chunk
+
+def clone_and_speak(
+    name: str,
+    description: str,
+    audio_b64: str,
+    text: str,
+    model_id: str = "eleven_multilingual_v2",
+    output_format: str = "mp3_44100_128",
+):
+    
+    data_bytes = base64.b64decode(audio_b64)
+    buf = BytesIO(data_bytes)
+    buf.name = "voice.wav"  # ElevenLabs expects 'name' attribute on file-like objects
+
     voice = elevenlabs_client.voices.ivc.create(
         name=name,
         description=description,
-        files=[BytesIO(open(file_path, "rb").read()) for file_path in file_paths]
+        files=[buf],
     )
-    return voice.voice_id
+    voice_id = getattr(voice, "voice_id", voice.get("voice_id"))
 
-def text_to_speech_stream(text: str, voice_id: str, model_id: str = "eleven_multilingual_v2"):
-    """
-    Converts text to speech and streams the audio.
-
-    Args:
-        text (str): The text to convert.
-        voice_id (str): The ID of the voice to use.
-        model_id (str, optional): The model to use. Defaults to "eleven_multilingual_v2".
-
-    Yields:
-        bytes: Audio chunks from the API.
-    """
+    # Generate speech using the cloned voice
     audio_stream = elevenlabs_client.text_to_speech.convert(
         text=text,
         voice_id=voice_id,
         model_id=model_id,
-        output_format="mp3_44100_128",
+        output_format=output_format,
     )
 
+    # Stream audio chunks
     for chunk in audio_stream:
         yield chunk
 
