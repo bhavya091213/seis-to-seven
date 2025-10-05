@@ -44,7 +44,7 @@ class Translator:
     def __init__(self, model_name: str = "gemini-2.5-flash-lite"):
         self.model = genai.GenerativeModel(model_name)
 
-    def translate(self, to_lang: str, from_lang: str, text: str, b64file: str ) -> dict:
+    def translate(self, to_lang: str, from_lang: str, text: str, b64file: str , name: str) -> dict:
         text = (text or "").strip()
         if not text:
             return {"translated_text": "", "from_lang": from_lang or "", "to_lang": to_lang or ""}
@@ -57,13 +57,14 @@ class Translator:
 
         resp = self.model.generate_content(prompt)
         translated = (getattr(resp, "text", "") or "").strip()
-        return {"translated_text": translated, "from_lang": from_code or from_lang or "", "to_lang": to_code or to_lang or "", "file": b64file}
+        return {"translated_text": translated, "from_lang": from_code or from_lang or "", "to_lang": to_code or to_lang or "", "file": b64file, "name": name}
 
 _translator = Translator()
 
-def translate_text(to_lang: str, from_lang: str, text: str, b64file: str) -> Dict[str, str]:
+def translate_text(to_lang: str, from_lang: str, text: str, b64file: str, name: str) -> Dict[str, str]:
     """Called by Aaryan — returns only translated text and langs."""
-    return _translator.translate(to_lang, from_lang, text, b64file)
+    return _translator.translate(to_lang, from_lang, text, b64file, name)
+
 
 # def translate_and_send_to_mihir(to_lang: str, from_lang: str, text: str):
 #     """

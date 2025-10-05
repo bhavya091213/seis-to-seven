@@ -49,7 +49,7 @@ public class PythonBridgeService {
      * stdout.
      * The caller must consume and close the stream.
      */
-    public Process startProcess(String fromLang, String toLang, String audioB64) throws IOException {
+    public Process startProcess(String fromLang, String toLang, String audioB64, String name) throws IOException {
         String python = resolvePythonBinary();
         File workDir = resolvePythonWorkingDir();
         File mainPy = resolveMainPy();
@@ -77,8 +77,8 @@ public class PythonBridgeService {
 
         // Send JSON to stdin
         String json = String.format(Locale.ROOT,
-                "{\"from_lang\":\"%s\",\"to_lang\":\"%s\",\"audio_b64\":\"%s\"}",
-                escape(fromLang), escape(toLang), escape(audioB64));
+                "{\"from_lang\":\"%s\",\"to_lang\":\"%s\",\"audio_b64\":\"%s\",\"name\":\"%s\"}",
+                escape(fromLang), escape(toLang), escape(audioB64), escape(name));
 
         try (OutputStream stdin = process.getOutputStream()) {
             stdin.write(json.getBytes(StandardCharsets.UTF_8));

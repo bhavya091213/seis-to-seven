@@ -25,13 +25,14 @@ public class AudioController {
     @PostMapping(value = "/translate", consumes = MediaType.APPLICATION_JSON_VALUE)
     public void translate(@RequestBody TranslateRequest req, HttpServletResponse resp) throws IOException {
         // Validate
-        if (req.from_lang == null || req.to_lang == null || req.audio_b64 == null) {
-            resp.sendError(400, "from_lang, to_lang, audio_b64 required");
+        if (req.from_lang == null || req.to_lang == null || req.audio_b64 == null || req.name == null) {
+            resp.sendError(400, "from_lang, to_lang, audio_b64 required, name required");
             return;
         }
+        System.out.println(req.name);
 
         // Start python and stream its stdout to client
-        var proc = python.startProcess(req.from_lang, req.to_lang, req.audio_b64);
+        var proc = python.startProcess(req.from_lang, req.to_lang, req.audio_b64, req.name);
 
         // We don’t know if TTS yields mp3 or wav—set a generic content type or your
         // known one.
@@ -59,5 +60,6 @@ public class AudioController {
         public String from_lang;
         public String to_lang;
         public String audio_b64;
+        public String name;
     }
 }
