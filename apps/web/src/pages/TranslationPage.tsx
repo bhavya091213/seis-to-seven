@@ -9,8 +9,6 @@ import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import { Mic, Volume2 } from "lucide-react";
 
-/** ---------------------------------- Theme ---------------------------------- */
-
 /** ---------------------------------- Language Map ---------------------------------- */
 const LANG_MAP: Record<string, string> = {
   en: "English",
@@ -64,13 +62,92 @@ const useTranslationCtx = () => {
   return c;
 };
 
+/** ---------------------------------- PCM Helpers (WS player) ---------------------------------- */
+function pcm16ToFloat32(ab: ArrayBuffer): Float32Array {
+  const src = new Int16Array(ab);
+  const dst = new Float32Array(src.length);
+  for (let i = 0; i < src.length; i++) dst[i] = src[i] / 32768;
+  return dst;
+}
+function rmsFloat32(a: Float32Array): number {
+  let s = 0;
+  for (let i = 0; i < a.length; i++) s += a[i] * a[i];
+  return Math.sqrt(s / Math.max(1, a.length));
+}
+
+/** ---------------------------------- WebSocket PCM Player (16kHz mono) ---------------------------------- */
+class PCMWebSocketPlayer {
+  private ws: WebSocket | null = null;
+  private audioCtx: AudioContext;
+  private gain: GainNode;
+  private queue: Float32Array[] = [];
+  private isPlaying = false;
+  private onLevel?: (level: number) => void;
+
+  constructor(audioCtx: AudioContext, onLevel?: (level: number) => void) {
+    this.audioCtx = audioCtx;
+    this.gain = this.audioCtx.createGain();
+    this.gain.connect(this.audioCtx.destination);
+    this.onLevel = onLevel;
+  }
+
+  connect(url: string) {
+    this.disconnect();
+    this.ws = new WebSocket(url);
+    this.ws.binaryType = "arraybuffer";
+
+    this.ws.onopen = () => {
+      this.audioCtx.resume();
+    };
+    this.ws.onmessage = (ev) => {
+      const floats = pcm16ToFloat32(ev.data as ArrayBuffer);
+      if (this.onLevel) {
+        const v = Math.min(1, Math.pow(rmsFloat32(floats), 0.65) * 1.35);
+        this.onLevel(v);
+      }
+      this.queue.push(floats);
+      this.pump();
+    };
+    this.ws.onerror = (e) => console.error("WS error", e);
+    this.ws.onclose = () => {
+      this.ws = null;
+    };
+  }
+
+  disconnect() {
+    if (this.ws) {
+      try {
+        this.ws.close();
+      } catch {}
+      this.ws = null;
+    }
+    this.queue = [];
+  }
+
+  private async pump() {
+    if (this.isPlaying) return;
+    this.isPlaying = true;
+    while (this.queue.length) {
+      const floats = this.queue.shift()!;
+      const buf = this.audioCtx.createBuffer(1, floats.length, 16000);
+      buf.getChannelData(0).set(floats);
+      const src = this.audioCtx.createBufferSource();
+      src.buffer = buf;
+      src.connect(this.gain);
+      const done = new Promise<void>((res) => (src.onended = () => res()));
+      src.start();
+      await done;
+    }
+    this.isPlaying = false;
+  }
+}
+
 /** ---------------------------------- Mic Recorder (WAV 16kHz 16-bit) ---------------------------------- */
 class MicRecorder {
   private stream: MediaStream | null = null;
   private audioCtx: AudioContext | null = null;
   private source: MediaStreamAudioSourceNode | null = null;
   private worklet: AudioWorkletNode | null = null;
-  private proc: ScriptProcessorNode | null = null;
   private chunks: Float32Array[] = [];
   private inputSampleRate = 48000;
   private onLevel?: (level: number) => void;
@@ -86,80 +163,54 @@ class MicRecorder {
     this.inputSampleRate = this.audioCtx.sampleRate;
     this.source = this.audioCtx.createMediaStreamSource(this.stream);
 
-    if (
-      this.audioCtx.audioWorklet &&
-      (this.audioCtx as any).audioWorklet.addModule
-    ) {
-      const workletUrl = URL.createObjectURL(
-        new Blob(
-          [
-            `
-          class RecorderProcessor extends AudioWorkletProcessor {
-            process(inputs) {
-              const input = inputs[0];
-              if (input && input[0]) {
-                const ch = input[0];
-                const buf = new Float32Array(ch.length);
-                buf.set(ch);
-                this.port.postMessage(buf, [buf.buffer]);
-              }
-              return true;
-            }
-          }
-          registerProcessor('recorder-processor', RecorderProcessor);
-        `,
-          ],
-          { type: "application/javascript" }
-        )
-      );
-      await this.audioCtx.audioWorklet.addModule(workletUrl);
-      URL.revokeObjectURL(workletUrl);
+    // AudioWorklet (no deprecated ScriptProcessor)
+    const workletUrl = URL.createObjectURL(
+      new Blob(
+        [
+          `class RecorderProcessor extends AudioWorkletProcessor {
+             process(inputs){
+               const input = inputs[0];
+               if (input && input[0]){
+                 const ch = input[0];
+                 const buf = new Float32Array(ch.length);
+                 buf.set(ch);
+                 this.port.postMessage(buf, [buf.buffer]);
+               }
+               return true;
+             }
+           }
+           registerProcessor('recorder-processor', RecorderProcessor);`,
+        ],
+        { type: "application/javascript" }
+      )
+    );
+    await (this.audioCtx as any).audioWorklet.addModule(workletUrl);
+    URL.revokeObjectURL(workletUrl);
 
-      this.worklet = new AudioWorkletNode(this.audioCtx, "recorder-processor");
-      this.worklet.port.onmessage = (e: MessageEvent<Float32Array>) => {
-        const block = e.data;
-        this.chunks.push(block);
-        if (this.onLevel) this.onLevel(this.rms(block));
-      };
-      this.source.connect(this.worklet);
-    } else {
-      // Fallback: ScriptProcessorNode
-      this.proc = this.audioCtx.createScriptProcessor(2048, 1, 1);
-      this.proc.onaudioprocess = (evt) => {
-        const ch = evt.inputBuffer.getChannelData(0);
-        const copy = new Float32Array(ch.length);
-        copy.set(ch);
-        this.chunks.push(copy);
-        if (this.onLevel) this.onLevel(this.rms(copy));
-      };
-      this.source.connect(this.proc);
-      this.proc.connect(this.audioCtx.destination); // needed on some browsers
-    }
+    this.worklet = new AudioWorkletNode(
+      this.audioCtx as any,
+      "recorder-processor"
+    );
+    this.worklet.port.onmessage = (e: MessageEvent<Float32Array>) => {
+      const block = e.data;
+      this.chunks.push(block);
+      if (this.onLevel) {
+        const v = Math.min(1, Math.pow(this.rms(block), 0.65) * 1.35);
+        this.onLevel(v);
+      }
+    };
+    (this.source as unknown as AudioNode).connect(
+      this.worklet as unknown as AudioNode
+    );
   }
 
   async stop(): Promise<Blob> {
     try {
-      if (this.worklet) {
-        try {
-          this.worklet.port.close();
-        } catch {}
-        try {
-          this.source?.disconnect();
-        } catch {}
-        try {
-          this.worklet.disconnect();
-        } catch {}
-      }
-      if (this.proc) {
-        try {
-          this.source?.disconnect();
-        } catch {}
-        try {
-          this.proc.disconnect();
-        } catch {}
-      }
-      if (this.audioCtx) await this.audioCtx.close();
-      if (this.stream) this.stream.getTracks().forEach((t) => t.stop());
+      this.source?.disconnect?.();
+      this.worklet?.disconnect?.();
+      this.worklet?.port?.close?.();
+      await this.audioCtx?.close?.();
+      this.stream?.getTracks().forEach((t) => t.stop());
     } finally {
       const wav = this.floatChunksToWav(
         this.chunks,
@@ -170,7 +221,6 @@ class MicRecorder {
       this.audioCtx = null;
       this.source = null;
       this.worklet = null;
-      this.proc = null;
       this.chunks = [];
       return wav;
     }
@@ -258,196 +308,58 @@ class MicRecorder {
   }
 }
 
-/** ---------------------------------- Audio Stream Player (WS -> PCM16 -> AudioContext) ---------------------------------- */
-class AudioStreamPlayer {
-  private ctx: AudioContext | null = null;
-  private worklet: AudioWorkletNode | null = null;
-  private scriptNode: ScriptProcessorNode | null = null;
-  private queue: Float32Array[] = [];
-  private ws: WebSocket | null = null;
-  private sampleRate: number;
-  private onRms?: (v: number) => void;
-  private onEnd?: () => void;
-  private closed = false;
-  private endTimeout: number | null = null;
-
-  constructor(sampleRate = 16000) {
-    this.sampleRate = sampleRate;
+/** ---------------------------------- WebAudio decode-and-play (REST) ---------------------------------- */
+async function decodeAndPlayWithWebAudio(
+  ctx: AudioContext,
+  arrayBuffer: ArrayBuffer,
+  onLevel?: (v: number) => void
+): Promise<void> {
+  // NEW: guard empty and resume if needed
+  if (!arrayBuffer || arrayBuffer.byteLength === 0) {
+    throw new Error("Empty audio buffer (0 bytes) from server");
   }
-
-  private async ensureAudio() {
-    if (this.ctx) return;
-    this.ctx = new (window.AudioContext || (window as any).webkitAudioContext)({
-      sampleRate: this.sampleRate,
-    });
-
-    // Inline AudioWorklet via Blob (no external file needed)
+  if (ctx.state === "suspended") {
     try {
-      const workletUrl = URL.createObjectURL(
-        new Blob(
-          [
-            `
-            class PCMPlayerProcessor extends AudioWorkletProcessor {
-              constructor(){
-                super();
-                this.buffer = new Int16Array(0);
-                this.readIndex = 0;
-                this.port.onmessage = (e) => {
-                  if(e.data?.type === 'push'){
-                    const chunk = new Int16Array(e.data.payload);
-                    const merged = new Int16Array(this.buffer.length + chunk.length);
-                    merged.set(this.buffer, 0);
-                    merged.set(chunk, this.buffer.length);
-                    this.buffer = merged;
-                  }
-                };
-              }
-              process(inputs, outputs){
-                const out = outputs[0][0];
-                const N = out.length;
-                for(let i=0;i<N;i++){
-                  if(this.readIndex < this.buffer.length){
-                    out[i] = Math.max(-1, Math.min(1, this.buffer[this.readIndex++] / 32768));
-                  } else {
-                    out[i] = 0;
-                  }
-                }
-                if(this.readIndex >= this.buffer.length){
-                  this.buffer = new Int16Array(0);
-                  this.readIndex = 0;
-                } else if(this.readIndex > 8192){
-                  const rem = this.buffer.length - this.readIndex;
-                  const tmp = new Int16Array(rem);
-                  tmp.set(this.buffer.subarray(this.readIndex));
-                  this.buffer = tmp;
-                  this.readIndex = 0;
-                }
-                return true;
-              }
-            }
-            registerProcessor('pcm-player', PCMPlayerProcessor);
-          `,
-          ],
-          { type: "application/javascript" }
-        )
-      );
-      await this.ctx.audioWorklet.addModule(workletUrl);
-      URL.revokeObjectURL(workletUrl);
-      this.worklet = new AudioWorkletNode(this.ctx, "pcm-player");
-      this.worklet.connect(this.ctx.destination);
-    } catch {
-      // Fallback
-      this.scriptNode = this.ctx.createScriptProcessor(2048, 0, 1);
-      this.scriptNode.onaudioprocess = (e) => {
-        const ch = e.outputBuffer.getChannelData(0);
-        if (this.queue.length === 0) {
-          ch.fill(0);
-          return;
-        }
-        const buf = this.queue.shift()!;
-        const n = Math.min(ch.length, buf.length);
-        ch.set(buf.subarray(0, n));
-        if (buf.length > n) this.queue.unshift(buf.subarray(n));
-        else if (n < ch.length) ch.fill(0, n);
-      };
-      this.scriptNode.connect(this.ctx.destination);
-    }
+      await ctx.resume();
+    } catch {}
   }
 
-  private int16ToFloat32(int16: Int16Array): Float32Array {
-    const out = new Float32Array(int16.length);
-    for (let i = 0; i < int16.length; i++) out[i] = int16[i] / 32768;
-    return out;
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+
+  let audioBuffer: AudioBuffer;
+  try {
+    audioBuffer = await ctx.decodeAudioData(arrayBuffer.slice(0));
+  } catch {
+    throw new Error("Unable to decode audio data (bad format or truncated)");
   }
 
-  private updateRms(int16: Int16Array) {
-    if (!this.onRms) return;
+  const src = ctx.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(analyser);
+  analyser.connect(ctx.destination);
+
+  let rafId: number | null = null;
+  const data = new Float32Array(analyser.frequencyBinCount);
+  const loop = () => {
+    analyser.getFloatTimeDomainData(data);
     let s = 0;
-    for (let i = 0; i < int16.length; i++) {
-      const f = int16[i] / 32768;
-      s += f * f;
-    }
-    const rms = Math.sqrt(s / Math.max(1, int16.length));
+    for (let i = 0; i < data.length; i++) s += data[i] * data[i];
+    const rms = Math.sqrt(s / Math.max(1, data.length));
     const exaggerated = Math.min(1, Math.pow(rms, 0.65) * 1.35);
-    this.onRms(exaggerated);
-  }
+    onLevel?.(exaggerated);
+    rafId = requestAnimationFrame(loop);
+  };
 
-  async playFromWebSocket(
-    url: string,
-    onRms: (v: number) => void,
-    onEnd: () => void,
-    maxDurationMs: number = 15000 // safety cap
-  ) {
-    await this.ensureAudio();
-    this.onRms = onRms;
-    this.onEnd = onEnd;
-    this.closed = false;
+  rafId = requestAnimationFrame(loop);
 
-    // safety: auto-stop after maxDurationMs in case server never closes
-    if (this.endTimeout) window.clearTimeout(this.endTimeout);
-    this.endTimeout = window.setTimeout(() => this.stop(), maxDurationMs);
+  const done = new Promise<void>((res) => (src.onended = () => res()));
+  src.start();
 
-    this.ws = new WebSocket(url);
-    this.ws.binaryType = "arraybuffer";
-    this.ws.onopen = () => {
-      try {
-        this.ws?.send("PING");
-      } catch {}
-    };
-    this.ws.onmessage = (evt) => {
-      if (typeof evt.data === "string") return;
-      const int16 = new Int16Array(evt.data as ArrayBuffer);
-      this.updateRms(int16);
+  await done;
 
-      if (this.worklet) {
-        // zero-copy transfer to worklet
-        this.worklet.port.postMessage({ type: "push", payload: int16.buffer }, [
-          int16.buffer,
-        ]);
-      } else {
-        this.queue.push(this.int16ToFloat32(int16));
-      }
-    };
-    this.ws.onclose = () => this.stop();
-    this.ws.onerror = () => this.stop();
-  }
-
-  stop() {
-    if (this.closed) return;
-    this.closed = true;
-
-    try {
-      this.ws?.close();
-    } catch {}
-    this.ws = null;
-
-    try {
-      this.worklet?.disconnect();
-    } catch {}
-    this.worklet = null;
-
-    try {
-      this.scriptNode?.disconnect();
-    } catch {}
-    this.scriptNode = null;
-
-    if (this.ctx) {
-      // let tail ring-out a touch
-      const ctx = this.ctx;
-      this.ctx = null;
-      setTimeout(() => ctx.close(), 120);
-    }
-
-    if (this.endTimeout) {
-      window.clearTimeout(this.endTimeout);
-      this.endTimeout = null;
-    }
-
-    if (this.onRms) this.onRms(0);
-    this.queue = [];
-
-    if (this.onEnd) this.onEnd();
-  }
+  if (rafId) cancelAnimationFrame(rafId);
+  onLevel?.(0);
 }
 
 /** ---------------------------------- Accent Orbs ---------------------------------- */
@@ -609,13 +521,19 @@ const SidePanel: React.FC<{
 }> = ({ title, lang, setLang, active }) => {
   return (
     <div
-      className={`rounded-2xl p-6 border ${active ? "border-orange-500/60" : "border-white/10"} bg-white/5 backdrop-blur-sm shadow-xl`}
+      className={`rounded-2xl p-6 border ${
+        active ? "border-orange-500/60" : "border-white/10"
+      } bg-white/5 backdrop-blur-sm shadow-xl`}
       style={{ minWidth: 320 }}
     >
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-2xl font-extrabold tracking-wide">{title}</h2>
         <span
-          className={`text-xs px-2 py-1 rounded ${active ? "bg-orange-600/30 text-orange-200" : "bg-zinc-700 text-zinc-200"}`}
+          className={`text-xs px-2 py-1 rounded ${
+            active
+              ? "bg-orange-600/30 text-orange-200"
+              : "bg-zinc-700 text-zinc-200"
+          }`}
         >
           {active ? "Your turn" : "Waiting"}
         </span>
@@ -648,6 +566,20 @@ const SidePanel: React.FC<{
   );
 };
 
+/** ---------------------------------- Helpers ---------------------------------- */
+async function blobToBase64(b: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onerror = () => reject(fr.error);
+    fr.onload = () => {
+      const result = String(fr.result || "");
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    fr.readAsDataURL(b);
+  });
+}
+
 /** ---------------------------------- Page ---------------------------------- */
 export const TranslationPage: React.FC = () => {
   const [langA, setLangA] = useState<string>("en");
@@ -655,44 +587,67 @@ export const TranslationPage: React.FC = () => {
   const [currentSide, setCurrentSide] = useState<Side>("A");
   const [micState, setMicState] = useState<MicState>("INACTIVE");
   const [volume, setVolume] = useState<number>(0);
+  const [error, setError] = useState<string | null>(null);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const recorderRef = useRef<MicRecorder | null>(null);
   if (!recorderRef.current) recorderRef.current = new MicRecorder();
 
-  // Player for WS stream
-  const playerRef = useRef<AudioStreamPlayer | null>(null);
-  if (!playerRef.current) playerRef.current = new AudioStreamPlayer(16000);
+  // WebAudio context for WS PCM playback (fixed 16k for timing)
+  const wsAudioCtxRef = useRef<AudioContext | null>(null);
+  const wsPlayerRef = useRef<PCMWebSocketPlayer | null>(null);
+
+  // Dedicated playback context for REST decode (lets browser pick correct rate)
+  const playbackCtxRef = useRef<AudioContext | null>(null);
+
+  React.useEffect(() => {
+    const ctx16k = new (window.AudioContext ||
+      (window as any).webkitAudioContext)({ sampleRate: 16000 });
+    wsAudioCtxRef.current = ctx16k;
+    wsPlayerRef.current = new PCMWebSocketPlayer(ctx16k, (v) => setVolume(v));
+
+    playbackCtxRef.current = new (window.AudioContext ||
+      (window as any).webkitAudioContext)();
+
+    return () => {
+      wsPlayerRef.current?.disconnect();
+      ctx16k.close();
+      playbackCtxRef.current?.close();
+    };
+  }, []);
+
+  const toggleWS = () => {
+    if (!wsPlayerRef.current) return;
+    if (!wsConnected) {
+      const host = location.host;
+
+      const url = `ws://${host}/audio/stream?streamId=main`;
+      // setTimeout(() => wsPlayerRef.current!.connect(url), 1000000);
+      wsPlayerRef.current.connect(url);
+      setWsConnected(true);
+    } else {
+      wsPlayerRef.current.disconnect();
+      setWsConnected(false);
+      setVolume(0);
+    }
+  };
 
   const sameLang = langA === langB;
-  const WS_URL = "ws://localhost:8080/audio/stream?streamId=main";
+  const API_BASE = "http://localhost:8080"; // rely on your existing setup
+  const API_URL = `${API_BASE}/api/voice/translate`;
 
   // ---- central interaction loop ----
   const startRec = async () => {
+    setError(null);
     await recorderRef.current!.start((lvl) => setVolume(lvl));
     setMicState("RECORDING");
   };
 
   const stopRec = async () => {
     setMicState("WAITING_STREAM");
-    const wav = await recorderRef.current!.stop();
+    const wav = await recorderRef.current!.stop(); // 16-bit 16kHz WAV
     setVolume(0);
-
-    // Send to backend (placeholder log)
     await onUtteranceFinished(currentSide, wav, langA, langB);
-
-    // Play from WebSocket stream instead of sine
-    setMicState("PLAYING");
-    playerRef.current!.playFromWebSocket(
-      WS_URL,
-      (rms) => setVolume(rms), // drive visuals during playback
-      () => {
-        // when stream finishes or times out
-        setVolume(0);
-        setMicState("INACTIVE");
-        setCurrentSide((s) => (s === "A" ? "B" : "A"));
-      },
-      20000 // optional: 20s safety cap
-    );
   };
 
   const handleCenterClick = async () => {
@@ -701,35 +656,86 @@ export const TranslationPage: React.FC = () => {
     else if (micState === "RECORDING") await stopRec();
   };
 
-  // Utterance handler: build payload {from, to, audio}
+  // Utterance handler: POST JSON {from_lang, to_lang, audio_b64} -> decode & play bytes
   const onUtteranceFinished = async (
     side: Side,
     audioBlob: Blob,
     lA: string,
     lB: string
   ) => {
-    const from = side === "A" ? lA : lB;
-    const to = side === "A" ? lB : lA;
-    const payload = {
-      from,
-      to,
-      audioBytes: await audioBlob
-        .arrayBuffer()
-        .then((b) => (b as ArrayBuffer).byteLength),
-      mime: audioBlob.type,
-      note: "Pretend this was POSTed to /translate",
-    };
-    console.log("✅ Sent to backend:", payload);
-  };
+    const from_lang = side === "A" ? lA : lB;
+    const to_lang = side === "A" ? lB : lA;
 
-  // Cleanup on unmount
-  React.useEffect(() => {
-    return () => {
+    try {
+      // 1) Convert to base64
+      const audio_b64 = await blobToBase64(audioBlob);
+
+      // 2) Call Spring Boot JSON endpoint
+      const resp = await fetch(API_URL, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "audio/wav, audio/mpeg;q=0.8",
+        },
+        body: JSON.stringify({ from_lang, to_lang, audio_b64 }),
+      });
+      console.log("did we have an ok");
+
+      if (!resp.ok) {
+        const text = await resp.text().catch(() => "");
+        throw new Error(
+          `HTTP ${resp.status} ${resp.statusText}${text ? ` — ${text}` : ""}`
+        );
+      }
+
+      // 3) Accumulate (handles chunked streaming) then decode and play
+      let buf: ArrayBuffer;
+      if (resp.body) {
+        const reader = resp.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value && value.length) {
+            chunks.push(value);
+            total += value.length;
+          }
+        }
+        const out = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) {
+          out.set(c, off);
+          off += c.length;
+        }
+        buf = out.buffer;
+      } else {
+        buf = await resp.arrayBuffer();
+      }
+
+      if (!buf || buf.byteLength === 0) {
+        throw new Error("No audio received from server");
+      }
+
+      const ctx = playbackCtxRef.current!;
+      setMicState("PLAYING");
+      console.log("trying to decode");
       try {
-        playerRef.current?.stop();
-      } catch {}
-    };
-  }, []);
+        console.log(ctx);
+        console.log(buf);
+        await decodeAndPlayWithWebAudio(ctx, buf, (v) => setVolume(v));
+      } finally {
+        setVolume(0);
+        setMicState("INACTIVE");
+        setCurrentSide((s) => (s === "A" ? "B" : "A"));
+      }
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message || "Playback failed");
+      setVolume(0);
+      setMicState("INACTIVE");
+    }
+  };
 
   const ctxValue = useMemo<TranslationCtx>(
     () => ({
@@ -750,7 +756,7 @@ export const TranslationPage: React.FC = () => {
   return (
     <Ctx.Provider value={ctxValue}>
       <div className="relative min-h-svh overflow-hidden bg-black text-white">
-        {/* Ambient backdrop: accent orbs tied to volume (mic or playback) */}
+        {/* Ambient backdrop: accent orbs tied to volume */}
         <AccentOrb
           x="-8%"
           y="-10%"
@@ -781,17 +787,29 @@ export const TranslationPage: React.FC = () => {
         />
 
         {/* Top bar */}
-        <div className="relative z-10 max-w-7xl mx-auto px-6 py-6 flex items-center justify-between">
+        <div className="relative z-10 max-w-7xl mx-auto px-6 py-6 flex items-center justify-between gap-4">
           <Link to="/" className="text-xl font-semibold hover:opacity-80">
             ← Back
           </Link>
-          <div className="text-sm">
-            <span className="uppercase tracking-widest text-zinc-400">
-              Turn
-            </span>{" "}
-            <span className="font-bold">
-              {currentSide === "A" ? "Left (A)" : "Right (B)"}
-            </span>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={toggleWS}
+              className={`px-3 py-1.5 rounded text-sm font-semibold ${
+                wsConnected ? "bg-green-600" : "bg-zinc-700"
+              }`}
+              title="Connect to live WS stream (PCM16)"
+            >
+              {wsConnected ? "Live: ON" : "Live: OFF"}
+            </button>
+            <div className="text-sm">
+              <span className="uppercase tracking-widest text-zinc-400">
+                Turn
+              </span>{" "}
+              <span className="font-bold">
+                {currentSide === "A" ? "Left (A)" : "Right (B)"}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -819,7 +837,10 @@ export const TranslationPage: React.FC = () => {
 
               {/* Orb */}
               <div className="relative mt-8 z-0">
-                <SiriOrb volume={volume} active={micState === "RECORDING"} />
+                <SiriOrb
+                  volume={volume}
+                  active={micState === "RECORDING" || wsConnected}
+                />
                 {langA === langB && (
                   <div className="absolute inset-0 rounded-2xl bg-black/60 backdrop-blur-[2px] flex items-center justify-center">
                     <div className="px-4 py-2 rounded-xl bg-zinc-900/80 border border-white/10 text-sm md:text-base font-semibold">
@@ -844,9 +865,7 @@ export const TranslationPage: React.FC = () => {
                     Listening… press to stop
                   </span>
                 ) : micState === "WAITING_STREAM" ? (
-                  <span className="text-orange-200">
-                    Processing & waiting for stream…
-                  </span>
+                  <span className="text-orange-200">Processing request…</span>
                 ) : micState === "PLAYING" ? (
                   <span className="text-white">Playing translation…</span>
                 ) : (
@@ -858,6 +877,12 @@ export const TranslationPage: React.FC = () => {
                   </span>
                 )}
               </div>
+
+              {error && (
+                <div className="mt-3 text-sm text-red-300 bg-red-900/30 border border-red-800/40 px-3 py-2 rounded-xl max-w-md">
+                  {error}
+                </div>
+              )}
             </div>
 
             {/* Right */}
