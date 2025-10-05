@@ -1,8 +1,10 @@
 from __future__ import annotations
 import os
-from typing import Dict, Optional, Tuple
+import hashlib
+from typing import Dict, Optional, Tuple, Generator
 from dotenv import load_dotenv
 import google.generativeai as genai
+from apps.routing.processing import text_to_speech_stream, create_voice
 
 # Load API key from .env
 load_dotenv()
@@ -87,11 +89,73 @@ class Translator:
 # Singleton instance
 _translator_singleton = Translator()
 
+# Voice Creation Cache (avoid re-cloning identical sources repeatedly)
+_voice_cache: dict[tuple[str, str], str] = {}
+
+
+def _hash_file(path: str) -> str:
+    """Compute a short SHA256 hash of a file for caching key purposes."""
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()[:16]
+
+
+def _create_or_get_voice(saved_wav_path: str, voice_name: Optional[str], description: Optional[str]) -> str:
+    """Create a cloned voice unless we already cached one for (voice_name, file_hash)."""
+    if not voice_name:
+        # Provide deterministic fallback name
+        voice_name = "ClonedVoice"
+    if not description:
+        description = "Auto-generated cloned voice from recording."
+
+    file_hash = _hash_file(saved_wav_path)
+    cache_key = (voice_name, file_hash)
+
+    if cache_key in _voice_cache:
+        return _voice_cache[cache_key]
+
+    try:
+        voice_id = create_voice(
+            name=voice_name,
+            description=description,
+            file_paths=[saved_wav_path],
+        )
+    except Exception as e:  # noqa: BLE001
+        # Provide a static default voice id fallback (same as processing.py example).
+        # In production, you might look up an existing stable voice.
+        voice_id = "JBFqnCBsd6RMkjVDRZzb"
+        # For observability you might log this; printing for now.
+        print(f"[translator] Voice creation failed, using fallback. Error: {e}")
+
+    _voice_cache[cache_key] = voice_id
+    return voice_id
+
 # Function Aaryan will call directly
-def translate_text(to_lang: str, from_lang: str, text: str) -> Dict[str, str]:
+def translate_text(to_lang: str, from_lang: str, text: str, saved_wav_path: str, voice_name: Optional[str] = None, voice_description: Optional[str] = None) -> Dict[str, any]:
     """
     Called by Aaryan.
-    Receives: (to_lang, from_lang, text)
-    Returns: {'translated_text', 'from_lang', 'to_lang'}
+    Receives: (to_lang, from_lang, text, saved_wav_path, voice_name, voice_description)
+    Returns: {'translated_text', 'from_lang', 'to_lang', 'voice_id', 'audio_stream'}
     """
-    return _translator_singleton.translate(to_lang, from_lang, text)
+    translation_result = _translator_singleton.translate(to_lang, from_lang, text)
+    
+    # Create or get voice from the saved WAV file
+    voice_id = _create_or_get_voice(
+        saved_wav_path=saved_wav_path,
+        voice_name=voice_name,
+        description=voice_description
+    )
+    
+    # Call text_to_speech_stream with translated text
+    audio_stream = text_to_speech_stream(
+        text=translation_result['translated_text'],
+        voice_id=voice_id
+    )
+    
+    return {
+        **translation_result,
+        'voice_id': voice_id,
+        'audio_stream': audio_stream
+    }
