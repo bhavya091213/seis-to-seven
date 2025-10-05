@@ -61,44 +61,107 @@ elevenlabs_client = ElevenLabs(
 #     for chunk in audio_stream:
 #         yield chunk
 
+# def clone_and_speak(
+#     audio_b64: str,
+#     name: str,
+#     text: str,
+#     model_id: str = "eleven_multilingual_v2",
+#     output_format: str = "mp3_44100_128",
+#     description: str = "b",
+# ):
+    
+    
+#     data_bytes = base64.b64decode(audio_b64)
+#     buf = BytesIO(data_bytes)
+#     buf.name = "voice.wav"  # ElevenLabs expects 'name' attribute on file-like objects
+
+#     # if name is in the session, then use that voice_id instead of creating a new one and generate speech using the existing voice
+#     # else, create a new voice clone
+
+#     voice = elevenlabs_client.voices.ivc.create(
+#         name=name,
+#         description=description,
+#         files=[buf],
+#     )
+    
+#     voice_id = getattr(voice, "voice_id", None)
+#     if voice_id is None and isinstance(voice, dict):
+#         voice_id = voice.get("voice_id")
+#     if not voice_id:
+#         raise RuntimeError("Failed to obtain voice_id from ElevenLabs IVC response")
+
+#     # Generate speech using the cloned voice
+#     audio_stream = elevenlabs_client.text_to_speech.convert(
+#         text=text,
+#         voice_id=voice_id,
+#         model_id=model_id,
+#         output_format=output_format,
+#     )
+
+#     # Stream audio chunks
+#     # for chunk in audio_stream:
+#     #     yield chunk
+
+#     return audio_stream
+
 def clone_and_speak(
     audio_b64: str,
+    name: str,
     text: str,
     model_id: str = "eleven_multilingual_v2",
     output_format: str = "mp3_44100_128",
-    name: str = "a",
     description: str = "b",
 ):
     
     data_bytes = base64.b64decode(audio_b64)
     buf = BytesIO(data_bytes)
-    buf.name = "voice.wav"  # ElevenLabs expects 'name' attribute on file-like objects
+    buf.name = "voice.wav"  # ElevenLabs expects a name attribute
 
-    voice = elevenlabs_client.voices.ivc.create(
-        name=name,
-        description=description,
-        files=[buf],
-    )
-    
-    voice_id = getattr(voice, "voice_id", None)
-    if voice_id is None and isinstance(voice, dict):
-        voice_id = voice.get("voice_id")
-    if not voice_id:
-        raise RuntimeError("Failed to obtain voice_id from ElevenLabs IVC response")
+    # Try to find an existing voice with the same name
+    existing_voice_id = None
+    try:
+        voices = elevenlabs_client.voices.get_all()
+        for v in voices.voices:
+            if v.name == name:
+                existing_voice_id = v.voice_id
+                break
+    except Exception as e:
+        print(f"[WARN] Failed to list voices: {e}")
 
-    # Generate speech using the cloned voice
-    audio_stream = elevenlabs_client.text_to_speech.convert(
-        text=text,
-        voice_id=voice_id,
-        model_id=model_id,
-        output_format=output_format,
-    )
+    # Step 3: If found, reuse the existing voice
+    if existing_voice_id:
+        voice_id = existing_voice_id
+        print(f"[INFO] Reusing existing ElevenLabs voice '{name}' ({voice_id})")
 
-    # Stream audio chunks
-    # for chunk in audio_stream:
-    #     yield chunk
+    # Step 4: Otherwise, create a new one
+    else:
+        print(f"[INFO] Creating new ElevenLabs voice '{name}'")
+        voice = elevenlabs_client.voices.ivc.create(
+            name=name,
+            description=description,
+            files=[buf],
+        )
 
+        voice_id = getattr(voice, "voice_id", None)
+        if voice_id is None and isinstance(voice, dict):
+            voice_id = voice.get("voice_id")
+        if not voice_id:
+            raise RuntimeError("Failed to obtain voice_id from ElevenLabs IVC response")
+
+    # Step 5: Generate speech using the cloned or existing voice
+    try:
+        audio_stream = elevenlabs_client.text_to_speech.convert(
+            text=text,
+            voice_id=voice_id,
+            model_id=model_id,
+            output_format=output_format,
+        )
+    except Exception as e:
+        raise RuntimeError(f"Text-to-speech conversion failed: {e}")
+
+    # Step 6: Return streaming audio generator
     return audio_stream
+
 
 # --- Example Usage ---
 # This block demonstrates how you would import and use the functions above
