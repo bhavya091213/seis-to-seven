@@ -1,14 +1,14 @@
 from __future__ import annotations
 import os
-from typing import Generator, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 import google.generativeai as genai
 
-# Load API key
+# Load API key from .env
 load_dotenv()
 genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Common language mapping
+# Supported language mappings
 LANG_MAP = {
     "en": "English",
     "es": "Spanish",
@@ -39,7 +39,7 @@ def _normalize_lang(lang: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
 
 
 def _build_system_prompt(source_disp: Optional[str], target_disp: str) -> str:
-    """Builds the system instruction for Gemini."""
+    """Builds the Gemini system prompt for translation."""
     src_part = (
         f"Source language is {source_disp}."
         if source_disp
@@ -54,83 +54,44 @@ def _build_system_prompt(source_disp: Optional[str], target_disp: str) -> str:
     )
 
 
-class StreamingTranslator:
+class Translator:
     """
-    Stateless per-call translator that takes:
-      - from_lang (speaker language)
-      - to_lang   (listener language)
-      - text      (ASR text from Aaryan)
-    Returns only the translated text.
+    Handles a single translation request:
+    - Receives: to_lang, from_lang, text
+    - Returns: translated_text, from_lang, to_lang
     """
 
     def __init__(self, model_name: str = "gemini-2.5-flash"):
         self.model = genai.GenerativeModel(model_name)
 
-    # ---------- One-shot (returns a single translated string) ----------
-    def translate_once(self, text: str, from_lang: Optional[str], to_lang: str) -> str:
+    def translate(self, to_lang: str, from_lang: Optional[str], text: str) -> Dict[str, str]:
+        """Translate a full text string once."""
         from_code, from_disp = _normalize_lang(from_lang)
         to_code, to_disp = _normalize_lang(to_lang)
 
         system_prompt = _build_system_prompt(from_disp, to_disp or to_lang)
         prompt = f"{system_prompt}\n\nSource text: {text}"
 
-        resp = self.model.generate_content(prompt)
-        translated = (getattr(resp, "text", "") or "").strip()
+        # Call Gemini
+        response = self.model.generate_content(prompt)
+        translated_text = (getattr(response, "text", "") or "").strip()
 
-        return translated
-
-    # ---------- Streaming (yields partial translated chunks) ----------
-    def translate_stream(
-        self, text: str, from_lang: Optional[str], to_lang: str
-    ) -> Generator[str, None, None]:
-        from_code, from_disp = _normalize_lang(from_lang)
-        _, to_disp = _normalize_lang(to_lang)
-
-        system_prompt = _build_system_prompt(from_disp, to_disp or to_lang)
-        prompt = f"{system_prompt}\n\nSource text: {text}"
-
-        try:
-            stream = self.model.generate_content(prompt, stream=True)
-            for chunk in stream:
-                piece = getattr(chunk, "text", "")
-                if piece:
-                    if not piece.endswith((" ", "\n")):
-                        piece += " "
-                    yield piece
-        except Exception as e:
-            yield f"[translation_error]: {type(e).__name__}: {e}\n"
+        # Return the structured result
+        return {
+            "translated_text": translated_text,
+            "from_lang": from_code or from_lang or "",
+            "to_lang": to_code or to_lang or "",
+        }
 
 
-# ---------- Singleton Instance ----------
-_translator_singleton = StreamingTranslator()
+# Singleton instance
+_translator_singleton = Translator()
 
-
-# ---------- Wrappers for Aaryan's order (to_lang, from_lang, text) ----------
-def translate_text_ordered(to_lang: str, from_lang: Optional[str], text: str) -> str:
+# Function Aaryan will call directly
+def translate_text(to_lang: str, from_lang: str, text: str) -> Dict[str, str]:
     """
-    Aaryan calls this with (to_lang, from_lang, text).
-    Returns: translated_text (string only)
+    Called by Aaryan.
+    Receives: (to_lang, from_lang, text)
+    Returns: {'translated_text', 'from_lang', 'to_lang'}
     """
-    return _translator_singleton.translate_once(text, from_lang, to_lang)
-
-
-def translate_text_stream_ordered(
-    to_lang: str, from_lang: Optional[str], text: str
-) -> Generator[str, None, None]:
-    """
-    Streaming variant for Aaryan's order.
-    Yields translated text fragments.
-    """
-    return _translator_singleton.translate_stream(text, from_lang, to_lang)
-
-
-# ---------- Local Test ----------
-if __name__ == "__main__":
-    print("One-shot (Aaryan order):")
-    translation = translate_text_ordered("es", "en", "We can begin in five minutes.")
-    print("Translated:", translation)
-
-    print("\nStreaming (Aaryan order):")
-    for part in translate_text_stream_ordered("es", "en", "Please review the document by EOD."):
-        print(part, end="", flush=True)
-    print()
+    return _translator_singleton.translate(to_lang, from_lang, text)
