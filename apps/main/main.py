@@ -1,8 +1,9 @@
 from apps.ASR.audio_processor import receive_data
-from gemini_api.translator import translate_text
+from apps.gemini_api.translator import translate_text
 import sys
 import json
 import base64
+from apps.routing.processing import clone_and_speak
 
 def processAudio(from_lang: str, to_lang: str, audio_b64: str):
     """
@@ -19,12 +20,12 @@ def processAudio(from_lang: str, to_lang: str, audio_b64: str):
     print(f"Received audio data size: {len(audio_b64)} bytes", file=sys.stderr)
 
     response_asr = receive_data(from_lang, to_lang, audio_b64)
-    response_trans = translate_text(response_asr.get("transcription"), response_asr.get("from_lang"), response_asr.get("to_lang"), response_asr.get("audio_data"))
-    
+    response_trans = translate_text(response_asr.get("to_lang"), response_asr.get("from_lang"), response_asr.get("transcription"), response_asr.get("audio_data"))
+
 
     # Later, you’ll call Aaryan’s STT, your Translator, Mihir’s TTS, etc.
     # For now, we’ll just echo back the audio for testing.
-    return audio_b64
+    return clone_and_speak(response_trans.get("file"), response_trans.get("translated_text"))
 
 
 if __name__ == "__main__":
@@ -58,14 +59,19 @@ if __name__ == "__main__":
 
 
         # Process the audio (your future pipeline)
-        processed_audio = processAudio(from_lang, to_lang, audio_b64)
+        # processed_audio = processAudio(from_lang, to_lang, audio_b64)
 
-        # Flush raw audio bytes to STDOUT (important!)
-        sys.stdout.buffer.write(processed_audio)
+        # # Flush raw audio bytes to STDOUT (important!)
+        # sys.stdout.buffer.write(processed_audio)
+        # sys.stdout.flush()
+
+        audio_stream = processAudio(from_lang, to_lang, audio_b64)
+
+        for chunk in audio_stream:
+            if isinstance(chunk, (bytes, bytearray)):
+                sys.stdout.buffer.write(chunk)
         sys.stdout.flush()
 
     except Exception as e:
-        error_msg = {"status": "error", "message": str(e)}
-        sys.stdout.write(json.dumps(error_msg))
-        sys.stdout.flush()
+        print(f"[ERROR] {type(e).__name__}: {e}", file=sys.stderr)
         sys.exit(1)

@@ -3,7 +3,6 @@ import os
 from typing import Dict, Optional, Tuple
 from dotenv import load_dotenv
 import google.generativeai as genai
-from processing import text_to_speech_stream  # call Mihir's code
 
 # ── Load API key ──────────────────────────────────────────────
 load_dotenv()
