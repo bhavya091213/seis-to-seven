@@ -12,10 +12,9 @@ elevenlabs = ElevenLabs(
   api_key=os.getenv("ELEVENLABS_API_KEY"),
 )
 
-def receive_data(from_lang: str, to_lang: str, audio_file: bytes) -> dict:
+def receive_data(from_lang: str, to_lang: str, audio_file: str) -> dict:
     # encode audio to b64
-    b64File = base64.b64encode(audio_file).decode('ascii')
-    audio_data = BytesIO(audio_file)
+    audio_data = BytesIO(base64.b64decode(audio_file))
     transcription = elevenlabs.speech_to_text.convert(
         file=audio_data,
         model_id="scribe_v1", # Model to use, for now only "scribe_v1" is supported
@@ -25,7 +24,7 @@ def receive_data(from_lang: str, to_lang: str, audio_file: bytes) -> dict:
     )
     
     onlytext = transcription.text
-    return {"transcription": onlytext, "from_lang": from_lang, "to_lang": to_lang, "audio_data": b64File} # comes in as a string, needs to be decoded, and then bytes in mihirs thing
+    return {"transcription": onlytext, "from_lang": from_lang, "to_lang": to_lang, "audio_data": audio_file} # comes in as a string, needs to be decoded, and then bytes in mihirs thing
 
 # data_bytes = base64.b64decode(b64) 
 

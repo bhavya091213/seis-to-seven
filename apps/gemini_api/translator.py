@@ -45,7 +45,7 @@ class Translator:
     def __init__(self, model_name: str = "gemini-1.5-flash"):
         self.model = genai.GenerativeModel(model_name)
 
-    def translate(self, to_lang: str, from_lang: Optional[str], text: str) -> Dict[str, str]:
+    def translate(self, to_lang: str, from_lang: str, text: str, b64file: str ) -> dict:
         text = (text or "").strip()
         if not text:
             return {"translated_text": "", "from_lang": from_lang or "", "to_lang": to_lang or ""}
@@ -58,29 +58,29 @@ class Translator:
 
         resp = self.model.generate_content(prompt)
         translated = (getattr(resp, "text", "") or "").strip()
-        return {"translated_text": translated, "from_lang": from_code or from_lang or "", "to_lang": to_code or to_lang or ""}
+        return {"translated_text": translated, "from_lang": from_code or from_lang or "", "to_lang": to_code or to_lang or "", "file": b64file}
 
 _translator = Translator()
 
-def translate_text(to_lang: str, from_lang: str, text: str) -> Dict[str, str]:
+def translate_text(to_lang: str, from_lang: str, text: str, b64file: str) -> Dict[str, str]:
     """Called by Aaryan — returns only translated text and langs."""
-    return _translator.translate(to_lang, from_lang, text)
+    return _translator.translate(to_lang, from_lang, text, b64file)
 
-def translate_and_send_to_mihir(to_lang: str, from_lang: str, text: str):
-    """
-    Translates the text, then calls Mihir's TTS function.
-    Your file no longer saves or manages audio — Mihir’s does.
-    """
-    result = translate_text(to_lang, from_lang, text)
-    translated = result["translated_text"]
+# def translate_and_send_to_mihir(to_lang: str, from_lang: str, text: str):
+#     """
+#     Translates the text, then calls Mihir's TTS function.
+#     Your file no longer saves or manages audio — Mihir’s does.
+#     """
+#     result = translate_text(to_lang, from_lang, text)
+#     translated = result["translated_text"]
 
-    # hand it directly to Mihir’s function
-    audio_stream = text_to_speech_stream(text=translated, voice_id=None)
+#     # hand it directly to Mihir’s function
+#     audio_stream = text_to_speech_stream(text=translated, voice_id=None)
 
-    # return both so the rest of the system can handle them
-    return {
-        "translated_text": translated,
-        "from_lang": result["from_lang"],
-        "to_lang": result["to_lang"],
-        "audio_stream": audio_stream
-    }
+#     # return both so the rest of the system can handle them
+#     return {
+#         "translated_text": translated,
+#         "from_lang": result["from_lang"],
+#         "to_lang": result["to_lang"],
+#         "audio_stream": audio_stream
+#     }
