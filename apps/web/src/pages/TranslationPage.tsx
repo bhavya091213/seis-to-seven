@@ -669,6 +669,8 @@ export const TranslationPage: React.FC = () => {
     try {
       // 1) Convert to base64
       const audio_b64 = await blobToBase64(audioBlob);
+      let name = side;
+      console.log(name);
 
       // 2) Call Spring Boot JSON endpoint
       const resp = await fetch(API_URL, {
@@ -677,7 +679,7 @@ export const TranslationPage: React.FC = () => {
           "Content-Type": "application/json",
           Accept: "audio/wav, audio/mpeg;q=0.8",
         },
-        body: JSON.stringify({ from_lang, to_lang, audio_b64 }),
+        body: JSON.stringify({ from_lang, to_lang, audio_b64, name }),
       });
       console.log("did we have an ok");
 
