@@ -1,0 +1,77 @@
+@import "tailwindcss";
+
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+
+@tailwind utilities;
+
+/* ---- Gradient Aura Utilities ---- */
+@layer utilities {
+  /* Card & button wrapper enabling the aura */
+  .aura {
+    position: relative;
+    isolation: isolate; /* keeps the glow behind */
+    overflow: hidden;
+  }
+
+  /* The animated, blurred gradient that appears on hover */
+  .aura::before {
+    content: "";
+    position: absolute;
+    inset: -30%;
+    border-radius: 24px;
+    z-index: -1;
+    opacity: 0;
+    filter: blur(28px);
+    transition: opacity 250ms ease, transform 300ms ease;
+
+    /* Uses CSS vars --x and --y for optional "mouse-follow" */
+    background:
+      radial-gradient(600px 300px at var(--x, 50%) var(--y, 50%), rgba(234,88,12,0.28), transparent 60%),
+      conic-gradient(from 0deg at 50% 50%, rgba(234,88,12,0.45), rgba(255,255,255,0.18), rgba(234,88,12,0.45));
+    animation: aura-rotate 10s linear infinite;
+  }
+
+  .aura:hover::before,
+  .aura:focus-visible::before {
+    opacity: .9;
+    transform: scale(1.02);
+  }
+
+  /* Button-specific subtle shadow glow */
+  .btn-aurora {
+    position: relative;
+    isolation: isolate;
+  }
+  .btn-aurora::after {
+    content: "";
+    position: absolute;
+    inset: -16px;
+    z-index: -1;
+    border-radius: 18px;
+    opacity: 0;
+    filter: blur(22px);
+    transition: opacity 250ms ease, transform 300ms ease;
+    background:
+      conic-gradient(from 0deg at 50% 50%, rgba(234,88,12,0.55), rgba(255,255,255,0.15), rgba(234,88,12,0.55));
+    animation: aura-rotate 9s linear infinite;
+  }
+  .btn-aurora:hover::after,
+  .btn-aurora:focus-visible::after {
+    opacity: 0.9;
+    transform: scale(1.03);
+  }
+}
+
+/* Slow rotation for that subtle moving sheen */
+@keyframes aura-rotate {
+  to { transform: rotate(360deg); }
+}
