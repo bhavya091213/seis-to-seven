@@ -6,73 +6,56 @@ from dotenv import load_dotenv
 import google.generativeai as genai
 from apps.routing.processing import text_to_speech_stream, create_voice
 
-# Load API key from .env
+# ── Load API key ──────────────────────────────────────────────
 load_dotenv()
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+api_key = os.getenv("GEMINI_API_KEY")
+if not api_key:
+    raise RuntimeError("GEMINI_API_KEY not found in .env")
+genai.configure(api_key=api_key)
 
-# Supported language mappings
-LANG_MAP = {
-    "en": "English",
-    "es": "Spanish",
-    "hi": "Hindi",
-    "zh": "Chinese",
-    "fr": "French",
-    "de": "German",
-    "pt": "Portuguese",
-    "ja": "Japanese",
-    "ko": "Korean",
+# ── Supported language mappings ───────────────────────────────
+LANG_MAP: Dict[str, str] = {
+    "en": "English", "es": "Spanish", "zh": "Chinese", "hi": "Hindi",
+    "fr": "French", "de": "German", "pt": "Portuguese", "ru": "Russian",
+    "ja": "Japanese", "ko": "Korean", "ar": "Arabic", "bn": "Bengali",
+    "it": "Italian", "tr": "Turkish", "vi": "Vietnamese", "ta": "Tamil",
+    "ur": "Urdu", "fa": "Persian (Farsi)", "pl": "Polish", "id": "Indonesian",
+    "ms": "Malay", "th": "Thai", "sw": "Swahili", "nl": "Dutch", "uk": "Ukrainian",
 }
 
-
-def _normalize_lang(lang: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
-    """Accepts 'en' or 'English' and returns (code, display_name)."""
-    if not lang:
-        return None, None
+def _norm_lang(lang: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    if not lang: return None, None
     l = lang.strip().lower()
-
-    if l in LANG_MAP:
-        return l, LANG_MAP[l]
-
+    if l in LANG_MAP: return l, LANG_MAP[l]
     for code, name in LANG_MAP.items():
-        if l == name.lower():
-            return code, name
-
+        if l == name.lower(): return code, name
     return l, lang.strip()
 
-
-def _build_system_prompt(source_disp: Optional[str], target_disp: str) -> str:
-    """Builds the Gemini system prompt for translation."""
-    src_part = (
-        f"Source language is {source_disp}."
-        if source_disp
-        else "If unclear, auto-detect the source language."
-    )
+def _prompt(src_disp: Optional[str], tgt_disp: str) -> str:
+    src = f"Source language is {src_disp}." if src_disp else "If unclear, auto-detect the source language."
     return (
         "You are a low-latency meeting interpreter. "
-        f"{src_part} Translate to {target_disp}. "
+        f"{src} Translate to {tgt_disp}. "
         "Preserve tone and intent. Prefer short, simple sentences. "
         "If the source is incomplete, translate the best-guess fragment without adding new facts. "
         "Only output the translation, nothing else."
     )
 
-
+# ── Core translator ───────────────────────────────────────────
 class Translator:
-    """
-    Handles a single translation request:
-    - Receives: to_lang, from_lang, text
-    - Returns: translated_text, from_lang, to_lang
-    """
-
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = "gemini-1.5-flash"):
         self.model = genai.GenerativeModel(model_name)
 
     def translate(self, to_lang: str, from_lang: Optional[str], text: str) -> Dict[str, str]:
-        """Translate a full text string once."""
-        from_code, from_disp = _normalize_lang(from_lang)
-        to_code, to_disp = _normalize_lang(to_lang)
+        text = (text or "").strip()
+        if not text:
+            return {"translated_text": "", "from_lang": from_lang or "", "to_lang": to_lang or ""}
+        if from_lang and to_lang and from_lang.lower() == to_lang.lower():
+            return {"translated_text": text, "from_lang": from_lang, "to_lang": to_lang}
 
-        system_prompt = _build_system_prompt(from_disp, to_disp or to_lang)
-        prompt = f"{system_prompt}\n\nSource text: {text}"
+        from_code, from_disp = _norm_lang(from_lang)
+        to_code, to_disp = _norm_lang(to_lang)
+        prompt = f"{_prompt(from_disp, to_disp or to_lang)}\n\nSource text: {text}"
 
         # Call Gemini
         response = self.model.generate_content(prompt)
