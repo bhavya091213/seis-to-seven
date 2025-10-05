@@ -1,73 +1,62 @@
-# React + TypeScript + Vite
+## 🧠 Inspiration
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Inspired by Apple’s new AirPods translation feature, we wanted to push the idea further — making live translation more **human-to-human, accessible, and instant**. “Seis to Seven” plays on the “six to seven” meme — bridging the gap between languages just like moving one number closer to understanding.
 
-Currently, two official plugins are available:
+At its core, this project is about **social good** — breaking down communication barriers that isolate people across healthcare, education, and global collaboration. Everyone deserves to be heard and understood, no matter what language they speak.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## 💬 What It Does
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+**Seis to Seven** enables natural, **two-way speech translation** in real time. From doctor–patient consultations to travelers asking for directions, it empowers seamless conversations across languages while preserving tone and emotion.
 
-## Expanding the ESLint configuration
+Our system auto-detects the spoken language, translates it using **Gemini**, and reproduces it with **ElevenLabs voice cloning** — so each speaker hears the other in their own language, **in the same voice**, creating true connection rather than machine output.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## 🧩 How We Built It
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+We engineered a **cross-platform, low-latency translation pipeline** combining:
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+* **Spring Boot** backend for stable networking and stream orchestration.
+* **Python bridge service** for ASR → Gemini Translation → ElevenLabs TTS.
+* **WebSockets** for real-time streaming and bi-directional data flow.
+* **Audio chunking** for phrase-by-phrase inference, reducing delay.
+* **Voice caching** to store cloned voices once and reuse them for faster response.
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Every decision was designed to **reduce latency and humanize machine speech**, making real-time translation not only possible but natural and inclusive.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+---
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## ⚙️ Challenges We Ran Into
+
+* Synchronizing **audio chunks** without cutting words mid-sentence.
+* Managing **latency bottlenecks** between multiple APIs and frameworks.
+* Persisting cloned voices securely to save time and storage.
+* Achieving consistent **stream quality** across different browsers and networks.
+
+---
+
+## 🏆 Accomplishments That We’re Proud Of
+
+* Reached **sub-second translation feedback** for real-time dialogue.
+* Created a scalable, modular architecture ready for web and mobile.
+* Unified **Gemini + ElevenLabs** in a single low-latency pipeline.
+* Built something that could **genuinely improve accessibility** for multilingual communication worldwide.
+
+---
+
+## 📚 What We Learned
+
+* The art of balancing **speed, accuracy, and humanity** in machine translation.
+* Designing for **stream synchronization** and concurrency between Java and Python.
+* How emotional realism in TTS can change how users feel when using translation tools.
+
+---
+
+## 🚀 What’s Next for *Seis to Seven*
+
+* Expand to **mobile and wearable devices** for real-world translation use.
+* Integrate **emotion transfer** and contextual understanding for empathy in speech.
+* Enable **multi-party translation** for classrooms, meetings, and global teams.
+* Partner with NGOs and accessibility groups to bring real-time translation to **underserved communities**.
